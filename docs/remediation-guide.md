@@ -1,160 +1,234 @@
 # Remediation Guide
 
-## Purpose
-This guide describes how to fix each intentionally introduced vulnerability in `vulnerable-telecom-api` and align the codebase with secure Java backend practices.
+This guide is written for developers who will harden the API while keeping behavior stable.  
+Each section describes the required change, why it matters, and common implementation pitfalls observed in Java API projects.
 
-## 1. Fix IDOR in `/customers/{id}` and `/billing/{accountId}`
+## 1. Customer object access control (`/customers/{id}`)
 
-### What to change
-- Derive caller identity from a validated token.
-- Enforce object-level authorization before returning records.
-- Return `403 Forbidden` on ownership mismatch.
+### What should change
 
-### Java example
-```java
-if (!record.getOwnerUserId().equals(requester.getUserId()) && !"ADMIN".equals(requester.getRole())) {
-    throw new AccessDeniedException("Forbidden");
-}
-```
+- Add object ownership checks before returning customer records.
+- Return `403 Forbidden` when a user requests an object they do not own.
 
-### Best practices
-- Implement authorization centrally (service policy or authorization middleware).
-- Add unit and integration tests for cross-account access attempts.
+### Why it matters
 
-## 2. Fix Broken Admin Authorization
+Without object-level checks, any authenticated user can read another customer's data.
 
-### What to change
-- Require authenticated identity for admin routes.
-- Enforce role checks (`ADMIN`) using Spring Security annotations and HTTP config.
+### Secure implementation principle
 
-### Java example
-```java
-@PreAuthorize("hasRole('ADMIN')")
-@GetMapping("/admin/users")
-public List<AppUser> listUsers() { ... }
-```
+`deny by default` and enforce authorization at every object retrieval point.
 
-### Best practices
-- Apply least privilege.
-- Use defense in depth: route guards plus service-layer checks.
+### Implementation guidance
 
-## 3. Fix SQL Injection
+- Compare `customer.ownerUserId` against `requester.userId`.
+- Allow privileged override only for explicit admin roles.
+- Keep this check in service logic, not only in controller code.
 
-### What to change
-- Replace string-concatenated SQL with prepared statements / parameterized queries.
-- Validate numeric path parameters before DB access.
+### Developer notes / common pitfalls
 
-### Java example
-```java
-String sql = "SELECT * FROM customer WHERE id = ?";
-Customer c = jdbcTemplate.queryForObject(sql, customerMapper, customerId);
-```
+- Do not assume numeric ID format means safe access.
+- Do not rely on frontend filtering as a security boundary.
 
-### Best practices
-- Never interpolate untrusted input into SQL.
-- Favor ORM query binding where possible.
+## 2. Billing object access control (`/billing/{accountId}`)
 
-## 4. Fix XSS in Ticket Data
+### What should change
 
-### What to change
-- Validate and constrain input length and allowed characters.
-- Encode output in the rendering context (HTML, JS, URL).
-- Optionally sanitize rich-text input with a strict allowlist policy.
+- Apply ownership and role authorization checks for billing account lookup.
+- Ensure cross-account requests are denied consistently.
 
-### Java example
-```java
-String safeSubject = HtmlUtils.htmlEscape(request.getSubject());
-ticket.setSubject(safeSubject);
-```
+### Why it matters
 
-### Best practices
-- Treat all client input as untrusted.
-- Do not rely on client-side sanitization only.
+Billing data is sensitive and high-value; cross-account exposure is both a privacy and trust issue.
 
-## 5. Remove Hardcoded Secrets
+### Secure implementation principle
 
-### What to change
-- Move secrets to environment variables or secret manager.
-- Rotate all exposed secrets.
+Authorize per object, not just per endpoint.
 
-### Java example
-```yaml
-spring:
-  datasource:
-    password: ${DB_PASSWORD}
-app:
-  jwt:
-    secret: ${APP_JWT_SECRET}
-```
+### Implementation guidance
 
-### Best practices
-- Enforce secret scanning in CI.
-- Separate secrets by environment (dev/stage/prod).
+- Load account and compare `ownerUserId` with caller identity.
+- Use consistent authorization helpers shared across customer and billing services.
 
-## 6. Secure File Upload
+### Developer notes / common pitfalls
 
-### What to change
-- Enforce file type and extension allowlist.
-- Enforce max file size.
-- Replace user-supplied file name with server-generated name.
-- Store uploads outside web root and scan uploads when applicable.
+- Avoid duplicate authorization logic that diverges over time.
+- Include negative tests (user A cannot access user B account).
 
-### Java example
-```java
-if (!allowedTypes.contains(file.getContentType()) || file.getSize() > MAX_BYTES) {
-    throw new IllegalArgumentException("Invalid file");
-}
-String storedName = UUID.randomUUID() + ".bin";
-```
+## 3. Admin function authorization (`/admin/users`)
 
-### Best practices
-- Block executable or scriptable file types unless explicitly required.
-- Log upload metadata for monitoring and incident response.
+### What should change
 
-## 7. Fix Weak JWT Validation
+- Require authenticated admin role for this route.
+- Add framework-level and service-level checks.
 
-### What to change
-- Use a standard JWT library with signature verification.
-- Validate `exp`, `iat`, `iss`, `aud` and algorithm policy.
-- Reject invalid tokens with `401 Unauthorized`.
+### Why it matters
 
-### Java example
-```java
-DecodedJWT jwt = JWT.require(Algorithm.HMAC256(secret))
-    .withIssuer("telecom-api")
-    .build()
-    .verify(token);
-```
+Function-level authorization gaps expose privileged operations to unauthorized users.
 
-### Best practices
-- Keep signing keys in secret manager.
-- Use short token lifetime and refresh tokens where appropriate.
+### Secure implementation principle
 
-## 8. Add Input Validation and Sanitization Baseline
+Apply least privilege and defense in depth for administrative paths.
 
-### What to change
-- Use Bean Validation (`@NotBlank`, `@Size`, `@Email`, etc.) on DTOs.
-- Add centralized exception handling for validation failures.
+### Implementation guidance
 
-### Java example
-```java
-public class LoginRequest {
-    @NotBlank
-    @Size(max = 64)
-    private String username;
-}
-```
+- Add route guard annotations (for example `@PreAuthorize("hasRole('ADMIN')")`).
+- Validate role membership from verified token claims only.
 
-### Best practices
-- Validate at API boundary and again for domain-specific rules.
-- Define explicit constraints for every external input field.
+### Developer notes / common pitfalls
 
-## Secure Coding Checklist (Java Backend)
-- Use parameterized queries only.
-- Enforce authentication and authorization on every sensitive route.
-- Protect secrets with managed secret storage.
-- Validate all input and encode all output.
-- Harden file upload pipelines.
-- Add logging, monitoring, and alerting for authentication and data-access anomalies.
-- Integrate SAST/DAST into CI/CD with build-breaking thresholds for high-risk findings.
+- Do not trust "admin" role from unverified token payloads.
+- Avoid implementing admin checks only in UI workflows.
 
+## 4. SQL injection in repository queries
+
+### What should change
+
+- Replace SQL string concatenation with parameterized queries.
+- Validate and coerce numeric inputs before data access.
+
+### Why it matters
+
+Concatenated query construction can allow untrusted input to alter SQL behavior.
+
+### Secure implementation principle
+
+Treat all external input as untrusted and keep SQL structure static.
+
+### Implementation guidance
+
+- Use `JdbcTemplate` with placeholders (`?`) and bound parameters.
+- Migrate query methods in `UserRepository`, `CustomerRepository`, and `BillingRepository`.
+
+### Developer notes / common pitfalls
+
+- Parameterization does not replace business authorization checks.
+- Avoid partial fixes where one repository method remains unsafe.
+
+## 5. Ticket content handling (stored/reflected XSS exposure)
+
+### What should change
+
+- Validate ticket fields for acceptable length and character set.
+- Apply context-aware output encoding in any UI that renders ticket data.
+
+### Why it matters
+
+Untrusted text can become executable content in downstream clients if rendered unsafely.
+
+### Secure implementation principle
+
+Validate on input, encode on output, and avoid trust transfer across system boundaries.
+
+### Implementation guidance
+
+- Add DTO constraints (`@NotBlank`, `@Size`) and optional sanitization policy.
+- Document rendering requirements for any consumer application.
+
+### Developer notes / common pitfalls
+
+- Sanitization alone is not enough; output encoding still matters.
+- Do not strip characters aggressively without product input (support workflows may need symbols).
+
+## 6. Hardcoded secrets in configuration
+
+### What should change
+
+- Remove plaintext secrets from `application.yml`.
+- Load secrets from environment variables or managed secret store.
+- Rotate values that were committed.
+
+### Why it matters
+
+Source-controlled secrets are easy to leak and difficult to track safely over time.
+
+### Secure implementation principle
+
+Separate code from secrets and enforce short credential exposure windows.
+
+### Implementation guidance
+
+- Replace static values with `${ENV_VAR}` placeholders.
+- Add secret scanning in CI and prevent future committed secrets.
+
+### Developer notes / common pitfalls
+
+- Removing secrets from latest commit is not enough; rotate values.
+- Avoid reusing one secret across environments.
+
+## 7. File upload hardening (`/files/upload`)
+
+### What should change
+
+- Enforce file type and extension allowlists.
+- Enforce size limits and reject empty uploads.
+- Replace user filename with randomized server-generated filename.
+
+### Why it matters
+
+File upload is a high-risk boundary where untrusted binary content enters the system.
+
+### Secure implementation principle
+
+Minimize trust in client-provided metadata and isolate upload storage.
+
+### Implementation guidance
+
+- Validate `contentType`, extension, and maximum file size.
+- Normalize destination path and store outside directly served paths.
+- Log upload metadata for auditability.
+
+### Developer notes / common pitfalls
+
+- MIME type checks alone are bypassable; combine with extension and content checks where possible.
+- Avoid returning internal absolute storage paths in API responses.
+
+## 8. Weak JWT validation
+
+### What should change
+
+- Replace custom Base64 parsing with standards-based JWT verification.
+- Enforce signature checks, token expiry, and expected claims.
+
+### Why it matters
+
+If token trust is weak, all authorization decisions become unreliable.
+
+### Secure implementation principle
+
+Only trust identity claims after cryptographic verification.
+
+### Implementation guidance
+
+- Use a maintained JWT library and pin accepted algorithms.
+- Reject invalid/expired tokens with clear `401` responses.
+- Avoid silent fallback to anonymous context for protected endpoints.
+
+### Developer notes / common pitfalls
+
+- Decoding is not verification.
+- Keep signing keys outside application code and rotate periodically.
+
+## 9. Baseline input validation across auth and ticket flows
+
+### What should change
+
+- Introduce bean validation annotations on request DTOs.
+- Add centralized validation error handling for consistent API responses.
+
+### Why it matters
+
+Validation gaps increase misuse risk and make downstream logic harder to secure.
+
+### Secure implementation principle
+
+Validate early at API boundaries, then enforce domain-specific rules in services.
+
+### Implementation guidance
+
+- Add `@Valid` on controller methods and constraints in DTO classes.
+- Define explicit max lengths and accepted formats for each field.
+
+### Developer notes / common pitfalls
+
+- Avoid generic `String` acceptance without constraints.
+- Keep validation messages developer-friendly but not overly verbose for attackers.

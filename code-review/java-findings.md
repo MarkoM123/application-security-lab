@@ -1,158 +1,116 @@
-# Java Secure Code Review Findings
+# Java Source Review Findings
 
-This file documents insecure code samples from the project and secure alternatives suitable for production code.
+This document captures source-level review notes for common insecure patterns found in the lab API.  
+It is written as an internal AppSec handoff for development teams.
 
-## 1. SQL Injection in Repository Query
+## 1. SQL query concatenation in repositories
 
-### Vulnerable snippet
-```java
-String sql = "SELECT id, username, password, role FROM app_user WHERE username = '" + username + "'";
-List<AppUser> users = jdbcTemplate.query(sql, userRowMapper());
-```
+- Vulnerable code pattern summary: SQL strings are assembled with user-controlled values (`username`, `id`, `accountId`) before execution with `JdbcTemplate`.
+- Why it is risky: Query semantics can be altered, enabling unauthorized data retrieval and bypass of intended constraints.
+- What to look for during review:
+  - SQL strings containing `+` with request/path inputs
+  - Repository methods receiving raw `String` IDs for numeric fields
+  - Shared helper methods that build SQL dynamically without bind parameters
+- Secure rewrite recommendation:
+  - Use parameterized SQL with placeholders and typed binding.
+  - Validate input types at controller/service boundary before repository calls.
+- Reviewer note: Fix this class of issue centrally and sweep all repositories in one pass to avoid partial remediation.
 
-### Why vulnerable
-- User-controlled input is concatenated into SQL.
-- Query semantics can be altered by crafted input.
+## 2. Missing object authorization in customer service
 
-### Secure version
-```java
-String sql = "SELECT id, username, password, role FROM app_user WHERE username = ?";
-List<AppUser> users = jdbcTemplate.query(sql, userRowMapper(), username);
-```
+- Vulnerable code pattern summary: Service fetches `Customer` by ID and returns it directly without checking owner-to-requester mapping.
+- Why it is risky: Any authenticated user can read another customer's data by changing object identifiers.
+- What to look for during review:
+  - Methods that accept both `resourceId` and `RequesterContext` but never compare them
+  - Controllers that pass auth context into services but do not enforce decisions
+- Secure rewrite recommendation:
+  - Enforce `ownerUserId == requester.userId` with explicit admin override.
+  - Return `403` for mismatch and add dedicated access tests.
+- Reviewer note: This is a policy issue as much as a code issue; define object access rules once and reuse.
 
-## 2. IDOR in Customer Access
+## 3. Missing object authorization in billing service
 
-### Vulnerable snippet
-```java
-public Customer getCustomerById(String customerId, RequesterContext requester) {
-    Customer customer = customerRepository.findByIdUnsafe(customerId);
-    return customer;
-}
-```
+- Vulnerable code pattern summary: Billing account lookup returns data without ownership or role checks.
+- Why it is risky: Exposes account plan and balance information across tenants/users.
+- What to look for during review:
+  - Data-returning methods with no authorization gate
+  - Inconsistent checks between customer and billing flows
+- Secure rewrite recommendation:
+  - Add reusable authorization helper for owner/admin checks.
+  - Ensure all account and customer reads use the same access policy.
+- Reviewer note: Keep policy decisions in service layer, not in repository.
 
-### Why vulnerable
-- Resource ownership is never checked.
-- Any authenticated user can request any record by identifier.
+## 4. Admin endpoint without function-level guard
 
-### Secure version
-```java
-public Customer getCustomerById(String customerId, RequesterContext requester) {
-    Customer customer = customerRepository.findById(customerId);
-    if (customer == null) {
-        return null;
-    }
-    if (!customer.getOwnerUserId().equals(requester.getUserId()) && !"ADMIN".equals(requester.getRole())) {
-        throw new AccessDeniedException("Forbidden");
-    }
-    return customer;
-}
-```
+- Vulnerable code pattern summary: `/admin/users` controller path returns privileged data with no role requirement.
+- Why it is risky: Non-admin users can invoke admin functionality directly.
+- What to look for during review:
+  - Controllers under `/admin` lacking `@PreAuthorize` or equivalent
+  - Service methods returning admin data without caller-role verification
+- Secure rewrite recommendation:
+  - Add route-level admin authorization and service-level role assertions.
+  - Reject unauthorized requests with `403`.
+- Reviewer note: Treat admin routes as high-risk and include them in mandatory security tests.
 
-## 3. Broken Authorization on Admin Endpoint
+## 5. Weak token validation flow in `JwtUtil`
 
-### Vulnerable snippet
-```java
-@GetMapping("/users")
-public ResponseEntity<List<AppUser>> getAdminUsers(...) {
-    return ResponseEntity.ok(adminService.getAllUsers());
-}
-```
+- Vulnerable code pattern summary: Token is Base64-decoded as JSON claims; no signature verification; expiry not strictly enforced.
+- Why it is risky: Claims can be tampered with and still trusted by downstream authorization logic.
+- What to look for during review:
+  - Custom JWT parsing with `Base64.getDecoder()` only
+  - Missing checks for `exp`, issuer, audience, and accepted algorithms
+  - Anonymous fallback behavior on token parsing errors
+- Secure rewrite recommendation:
+  - Use verified JWT library flow (`verify`) with strict claim checks.
+  - Fail closed for invalid tokens on protected routes.
+- Reviewer note: Authentication integrity must be fixed before relying on any role-based policy.
 
-### Why vulnerable
-- Endpoint exposes admin data without role verification.
-- No defense in depth at controller/service level.
+## 6. Ticket handling accepts untrusted content as-is
 
-### Secure version
-```java
-@PreAuthorize("hasRole('ADMIN')")
-@GetMapping("/users")
-public ResponseEntity<List<AppUser>> getAdminUsers() {
-    return ResponseEntity.ok(adminService.getAllUsers());
-}
-```
+- Vulnerable code pattern summary: `subject` and `message` are persisted and returned without constraints or encoding strategy.
+- Why it is risky: Creates stored/reflected XSS exposure in downstream rendering clients.
+- What to look for during review:
+  - DTO fields without length/content constraints
+  - Raw pass-through from request to persistence model
+  - API responses returning user text intended for UI rendering
+- Secure rewrite recommendation:
+  - Validate field size/content at DTO boundary.
+  - Encode in output context and optionally sanitize where business-appropriate.
+- Reviewer note: Pair backend controls with frontend safe rendering standards.
 
-## 4. Weak JWT Validation
+## 7. Hardcoded secrets in configuration
 
-### Vulnerable snippet
-```java
-String decoded = new String(Base64.getDecoder().decode(token), StandardCharsets.UTF_8);
-Map<String, Object> claims = objectMapper.readValue(decoded, new TypeReference<>() {});
-return new RequesterContext(userId, role, token);
-```
+- Vulnerable code pattern summary: JWT secret, DB password, and API key are stored in plaintext in `application.yml`.
+- Why it is risky: Repository exposure or artifact leakage can reveal live credentials and token signing material.
+- What to look for during review:
+  - Config keys like `password`, `secret`, `api-key` with literal values
+  - Environment values checked into local defaults
+- Secure rewrite recommendation:
+  - Use environment-backed placeholders and secret management.
+  - Rotate existing values and document rotation ownership.
+- Reviewer note: This is both a code hygiene and operational process fix.
 
-### Why vulnerable
-- Base64 decoding is not JWT signature verification.
-- Expiration and issuer claims are not enforced.
+## 8. Upload storage trusts client filename and metadata
 
-### Secure version
-```java
-DecodedJWT jwt = JWT.require(Algorithm.HMAC256(secret))
-    .withIssuer("telecom-api")
-    .build()
-    .verify(token);
-Long userId = jwt.getClaim("userId").asLong();
-String role = jwt.getClaim("role").asString();
-```
+- Vulnerable code pattern summary: Original filename is used in storage path and no allowlist/size validation is applied.
+- Why it is risky: Allows unsafe content entry and increases path-related misuse risk.
+- What to look for during review:
+  - Direct use of `getOriginalFilename()` in file path construction
+  - Missing size checks and content-type checks
+  - API response exposing internal filesystem path
+- Secure rewrite recommendation:
+  - Validate file type and size.
+  - Generate server-side filename and isolate upload storage.
+- Reviewer note: File upload controls should be treated as a dedicated security control set, not ad hoc validation.
 
-## 5. XSS Risk in Ticket Creation
+## 9. Missing baseline request validation
 
-### Vulnerable snippet
-```java
-ticket.setSubject(request.getSubject());
-ticket.setMessage(request.getMessage());
-```
-
-### Why vulnerable
-- Untrusted data is stored and returned without validation or encoding.
-- Downstream UI may render unsafe content.
-
-### Secure version
-```java
-String sanitizedSubject = HtmlUtils.htmlEscape(request.getSubject());
-String sanitizedMessage = HtmlUtils.htmlEscape(request.getMessage());
-ticket.setSubject(sanitizedSubject);
-ticket.setMessage(sanitizedMessage);
-```
-
-## 6. Hardcoded Secrets in Configuration
-
-### Vulnerable snippet
-```yaml
-app:
-  jwt:
-    secret: hardcoded-very-weak-demo-secret
-```
-
-### Why vulnerable
-- Secrets in source control are accessible to all code readers.
-- Rotation and environment separation become difficult.
-
-### Secure version
-```yaml
-app:
-  jwt:
-    secret: ${APP_JWT_SECRET}
-```
-
-## 7. Insecure File Upload
-
-### Vulnerable snippet
-```java
-Path destination = uploadDir.resolve(originalFileName);
-Files.copy(file.getInputStream(), destination, StandardCopyOption.REPLACE_EXISTING);
-```
-
-### Why vulnerable
-- Missing allowlist validation (type, extension, size).
-- User-controlled filename directly impacts storage path.
-
-### Secure version
-```java
-String safeName = UUID.randomUUID() + ".pdf";
-if (!allowedContentTypes.contains(file.getContentType()) || file.getSize() > maxSizeBytes) {
-    throw new IllegalArgumentException("Invalid upload");
-}
-Path destination = uploadDir.resolve(safeName).normalize();
-Files.copy(file.getInputStream(), destination, StandardCopyOption.REPLACE_EXISTING);
-```
-
+- Vulnerable code pattern summary: Login and ticket DTOs accept unbounded strings without bean validation.
+- Why it is risky: Malformed/unexpected input reaches core logic and broadens attack surface.
+- What to look for during review:
+  - Controllers accepting DTOs without `@Valid`
+  - DTO classes without `@NotBlank`, `@Size`, or `@Pattern`
+- Secure rewrite recommendation:
+  - Add validation annotations and centralized validation error handling.
+  - Define field constraints aligned with business requirements.
+- Reviewer note: Validation is foundational and should be standardized across all endpoints.

@@ -1,26 +1,27 @@
 # DAST Notes
 
-## Goal
-Validate runtime security behavior of telecom API endpoints in a local, controlled environment.
+## What DAST can help validate in this app
 
-## Recommended Tools
-- OWASP ZAP (baseline scan + authenticated exploration)
-- Postman or curl for deterministic endpoint checks
+DAST is useful here for confirming runtime behavior at API boundaries, especially:
 
-## Focus Areas
-- Authorization bypass on `/admin/users`
-- Object-level access control on `/customers/{id}` and `/billing/{accountId}`
-- Input handling on `/login` and `/tickets`
-- Upload controls on `/files/upload`
-- Token validation behavior across protected routes
+- whether access control decisions are enforced consistently
+- whether endpoints leak sensitive data under unexpected caller context
+- whether input handling and file upload restrictions are actually active
+- whether error responses reveal implementation details
 
-## Safe Testing Approach
-- Use lab-only sample users and sample data.
-- Avoid disruptive fuzzing volume.
-- Record only defensive observations and remediation actions.
+## What DAST cannot reliably prove on its own
 
-## Expected Deliverables
-- Route-level security behavior matrix
-- Risk-ranked findings with evidence
-- Retest notes after remediation
+- Correctness of internal authorization logic in every code path
+- Cryptographic strength and claim-validation quality of JWT implementation
+- Root cause and secure remediation details in source code
+- Business impact without context from architecture and data flows
 
+## Why manual validation is still required
+
+This API has logic-driven issues (IDOR, role checks, weak token trust) that need source and behavior correlation.  
+Manual review is required to confirm exploitability, identify root cause, and produce practical remediation guidance.
+
+## Suggested tooling
+
+- OWASP ZAP for exploratory API testing in a local lab
+- Postman/curl for deterministic route checks and retest workflows

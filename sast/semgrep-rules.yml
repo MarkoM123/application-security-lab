@@ -1,26 +1,55 @@
 rules:
-  - id: java-sqli-string-concat
-    languages: [java]
+  - id: java-unsafe-sql-concatenation
+    message: Possible SQL injection risk: query appears to be built with string concatenation.
     severity: ERROR
-    message: Potential SQL Injection: SQL statement appears to be built via string concatenation.
+    languages: [java]
     patterns:
-      - pattern: String $SQL = "... " + $X + "...";
+      - pattern-regex: (?i)String\s+\w+\s*=\s*".*(SELECT|UPDATE|DELETE|INSERT).+"\s*\+\s*\w+
+    metadata:
+      category: security
+      area: injection
+      confidence: medium
+      owasp_api_top_10_2023: API8
+
+  - id: java-weak-token-base64-parse
+    message: Possible weak token validation: Base64 decode used in auth flow without clear JWT signature verification.
+    severity: WARNING
+    languages: [java]
+    patterns:
+      - pattern: Base64.getDecoder().decode($TOKEN)
       - pattern-inside: |
           class $C {
             ...
           }
     metadata:
       category: security
-      technology: [java, spring]
-      owasp: "A03:2021 - Injection"
+      area: authentication
+      confidence: medium
+      owasp_api_top_10_2023: API2
 
-  - id: java-hardcoded-secret
-    languages: [yaml]
+  - id: java-unsafe-upload-original-filename
+    message: Upload path may trust user-controlled filename. Use server-generated names and validation.
     severity: WARNING
-    message: Potential hardcoded secret in configuration.
+    languages: [java]
     patterns:
-      - pattern-regex: "(password|secret|api-key|apikey)\\s*:\\s*['\\\"]?.+['\\\"]?"
+      - pattern: |
+          $NAME = $FILE.getOriginalFilename();
+          ...
+          $DEST = $DIR.resolve($NAME);
     metadata:
       category: security
-      owasp: "A02:2021 - Cryptographic Failures"
+      area: file-upload
+      confidence: medium
+      owasp_api_top_10_2023: API8
 
+  - id: yaml-hardcoded-secret-value
+    message: Potential hardcoded secret in configuration. Move to environment or secret manager.
+    severity: WARNING
+    languages: [yaml]
+    patterns:
+      - pattern-regex: (?i)(password|secret|api[-_]?key)\s*:\s*['"]?[A-Za-z0-9._!@#%+=-]{8,}
+    metadata:
+      category: security
+      area: secrets
+      confidence: medium
+      owasp_api_top_10_2023: API8

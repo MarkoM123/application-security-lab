@@ -1,0 +1,26 @@
+rules:
+  - id: java-sqli-string-concat
+    languages: [java]
+    severity: ERROR
+    message: Potential SQL Injection: SQL statement appears to be built via string concatenation.
+    patterns:
+      - pattern: String $SQL = "... " + $X + "...";
+      - pattern-inside: |
+          class $C {
+            ...
+          }
+    metadata:
+      category: security
+      technology: [java, spring]
+      owasp: "A03:2021 - Injection"
+
+  - id: java-hardcoded-secret
+    languages: [yaml]
+    severity: WARNING
+    message: Potential hardcoded secret in configuration.
+    patterns:
+      - pattern-regex: "(password|secret|api-key|apikey)\\s*:\\s*['\\\"]?.+['\\\"]?"
+    metadata:
+      category: security
+      owasp: "A02:2021 - Cryptographic Failures"
+

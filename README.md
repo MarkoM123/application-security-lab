@@ -1,58 +1,99 @@
 # application-security-review-lab
 
-## Project Overview
-`application-security-review-lab` is a defensive AppSec portfolio project that simulates a vulnerable telecom backend built with Java Spring Boot.
+A hands-on Application Security portfolio project built around a deliberately vulnerable Java Spring Boot REST API.
 
-Purpose:
-- demonstrate secure code review skills
-- practice SAST/DAST mindset
-- identify and explain application vulnerabilities
-- provide remediation guidance for Java backend issues
+The goal of this lab is to show a practical AppSec workflow: reviewing code, identifying insecure patterns, validating findings, and documenting remediation in a way that reflects how security reviews are often performed in real development environments.
 
-This project is intentionally insecure and should only be run in a local lab environment.
+This project is intentionally insecure and is meant for local, educational use only.
 
-## Architecture
-- Application type: Spring Boot REST API
-- Domain: Telecom backend (authentication, customer data, billing, support tickets, admin users, file uploads)
-- Data layer: H2 in-memory database + intentionally unsafe query patterns
-- Auth model: intentionally weak token handling for training
+---
 
-Main components:
-- `controller`: API endpoints
-- `service`: business logic (intentionally insecure in places)
-- `repository`: database access with unsafe examples
-- `security`: weak JWT parsing utilities
+## Why I built this
 
-## Project Structure
-```text
-application-security-review-lab/
-  app/
-    vulnerable-telecom-api/
-  docs/
-    findings-report.md
-    remediation-guide.md
-  code-review/
-    java-findings.md
-  sast/
-    README.md
-    semgrep-rules.yml
-  dast/
-    README.md
-    manual-test-checklist.md
-```
+I wanted a project that demonstrates more than just “finding bugs.”  
+The focus here is on the full application security process:
 
-## Implemented Vulnerabilities
-1. IDOR in `GET /customers/{id}`
-2. IDOR in `GET /billing/{accountId}`
-3. Broken authorization in `GET /admin/users`
-4. SQL Injection via unsafe query concatenation
-5. Stored/Reflected XSS in `POST /tickets`
-6. Hardcoded secrets in configuration
-7. Insecure file upload in `POST /files/upload`
-8. Weak JWT validation (no signature/expiry enforcement)
-9. Missing input sanitization
+- understanding the application structure
+- reviewing backend code for security issues
+- validating risky behavior
+- documenting findings clearly
+- suggesting realistic remediation
 
-## API Endpoints
+Rather than building a large or overly complex app, I kept the application small enough to review properly, but realistic enough to reflect common backend security mistakes.
+
+---
+
+## What this project covers
+
+This lab is designed to demonstrate practical skills in:
+
+- source code review
+- secure coding analysis
+- basic SAST/DAST workflow
+- vulnerability identification and validation
+- remediation planning
+- AppSec-style reporting
+
+---
+
+## Application overview
+
+The application simulates a small telecom-style backend API with common business functionality such as:
+
+- authentication
+- customer record access
+- billing lookups
+- support ticket submission
+- administrative user listing
+- file upload handling
+
+The backend is built with **Java + Spring Boot** and uses an **H2 in-memory database** for simplicity.
+
+Some parts of the application intentionally use insecure patterns to create realistic AppSec review scenarios.
+
+---
+
+## Architecture summary
+
+### Stack
+- Java 17
+- Spring Boot
+- Maven
+- H2 database
+
+### Main components
+- **Controllers** → expose REST API endpoints
+- **Services** → contain business logic
+- **Repositories** → interact with the database
+- **Security utilities** → intentionally weak token handling for review purposes
+
+### Design approach
+The project is intentionally structured like a small internal business API so it can be reviewed the same way a real application assessment might begin: by understanding trust boundaries, data access paths, and where authorization and input handling can break down.
+
+---
+
+## Security issues intentionally included
+
+This project contains a small set of common and interview-relevant application security issues:
+
+- **IDOR** in customer data access
+- **IDOR** in billing record access
+- **Broken authorization** on admin functionality
+- **SQL Injection risk** through unsafe query construction
+- **Stored / reflected XSS risk** in support ticket fields
+- **Hardcoded secrets** in configuration
+- **Insecure file upload handling**
+- **Weak JWT/token validation**
+- **Missing input sanitization**
+
+These issues were chosen because they are realistic, easy to explain in a code review setting, and useful for demonstrating remediation thinking.
+
+---
+
+## API endpoints
+
+The lab exposes the following endpoints:
+
 - `POST /login`
 - `GET /customers/{id}`
 - `GET /billing/{accountId}`
@@ -61,48 +102,15 @@ application-security-review-lab/
 - `GET /admin/users`
 - `POST /files/upload`
 
-## How To Run
-Prerequisites:
+---
+
+## Running the lab
+
+### Requirements
 - Java 17+
 - Maven 3.9+
 
-Run:
+### Start the application
 ```bash
 cd app/vulnerable-telecom-api
 mvn spring-boot:run
-```
-
-App defaults:
-- Base URL: `http://localhost:8080`
-- H2 console: `http://localhost:8080/h2-console`
-
-## Safe Vulnerability Testing (Educational)
-- IDOR: authenticate as one sample user, then request another user's `customer` or `billing` identifier to verify missing ownership checks.
-- Broken authorization: call `/admin/users` with no token or non-admin token and observe exposed data.
-- SQL Injection risk: provide SQL-tainted input in login/customer identifiers and observe query behavior in this controlled lab.
-- XSS risk: submit ticket fields containing HTML-like input and observe unsanitized storage/echo behavior.
-- Weak JWT: inspect token format and verify that tampering is not cryptographically detected in the current implementation.
-- File upload: upload unsupported file types and observe acceptance due to missing server-side validation.
-
-Do not run these tests against systems you do not own or have permission to assess.
-
-## Tools Used (SAST / DAST)
-SAST:
-- Semgrep
-- SpotBugs
-- SonarQube (optional)
-
-DAST:
-- OWASP ZAP
-- Postman or curl for endpoint behavior validation
-
-See:
-- `sast/README.md`
-- `dast/README.md`
-- `dast/manual-test-checklist.md`
-
-## Documentation
-- Security findings report: `docs/findings-report.md`
-- Remediation guide: `docs/remediation-guide.md`
-- Code review notes and secure rewrites: `code-review/java-findings.md`
-
